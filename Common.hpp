@@ -119,6 +119,7 @@ template<typename N> constexpr __forceinline static N AlignP2Bkwd(N Value, unsig
 //---------------------------------------------------------------------------
 #include "UTF.hpp"
 #include "HDE.hpp"
+#include "IDEC.hpp"
 #include "StrUtils.hpp"
 #include "FormatPE.hpp"
 //#include "BdsCompat.hpp"         // Rarely used. Let it be outside for now

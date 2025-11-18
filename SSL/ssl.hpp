@@ -365,8 +365,8 @@ int  s_recv(char* b,int sz)
 	SecPkgContext_StreamSizes Sizes;
 	SECURITY_STATUS ss = 0;
 	ss = QueryContextAttributes(&hCtx,SECPKG_ATTR_STREAM_SIZES,&Sizes);
-	if (FAILED(ss))
-		return -1;
+	if (FAILED(ss)) {
+		DBGMSG("QueryContextAttributes failed!"); return -1; }
 
 	int TotalR = 0;
 	int pI = 0;
@@ -413,8 +413,8 @@ int  s_recv(char* b,int sz)
 		else
 			{
 			rval = recv_p(mmsg + pI,dwMessage);
-			if (rval == 0 || rval == -1)
-				return rval;
+			if (rval == 0 || rval == -1) {
+				DBGMSG("recv_p returned: %i", rval); return rval; }
 			pI += rval;
 			}
 
@@ -434,8 +434,8 @@ int  s_recv(char* b,int sz)
 		ss = DecryptMessage(&hCtx,&sbin,0,NULL);
 		if (ss == SEC_E_INCOMPLETE_MESSAGE)
 			continue;
-		if (ss != SEC_E_OK && ss != SEC_I_RENEGOTIATE && ss != SEC_I_CONTEXT_EXPIRED)
-			return -1;
+		if (ss != SEC_E_OK && ss != SEC_I_RENEGOTIATE && ss != SEC_I_CONTEXT_EXPIRED) {
+			DBGMSG("SEC Unexpected: %i",(int)ss); return -1; }
 
 		pDataBuffer  = NULL;
 		pExtraBuffer = NULL;
@@ -461,8 +461,8 @@ int  s_recv(char* b,int sz)
 		if (ss == SEC_I_RENEGOTIATE)
 			{
 			ss = ClientLoop();
-			if (FAILED(ss))
-				return -1;
+			if (FAILED(ss)) {
+				DBGMSG("ClientLoop failed: %i",ss); return -1; }
 			}
 
 	
@@ -703,8 +703,9 @@ int  ClientInit(bool NoLoop = false)
 	// Configure our SSL SChannel
 	memset(&m_SchannelCred,0,sizeof(m_SchannelCred));
 	m_SchannelCred.dwVersion = SCHANNEL_CRED_VERSION;
-	m_SchannelCred.dwFlags |= SCH_CRED_NO_DEFAULT_CREDS;
-	m_SchannelCred.dwFlags |= SCH_CRED_NO_DEFAULT_CREDS | SCH_CRED_NO_SYSTEM_MAPPER | SCH_CRED_REVOCATION_CHECK_CHAIN;
+	//m_SchannelCred.dwFlags |= SCH_CRED_NO_DEFAULT_CREDS;
+	//m_SchannelCred.dwFlags |= SCH_CRED_NO_DEFAULT_CREDS | SCH_CRED_NO_SYSTEM_MAPPER | SCH_CRED_REVOCATION_CHECK_CHAIN;
+    m_SchannelCred.dwFlags = SCH_CRED_NO_DEFAULT_CREDS | SCH_CRED_MANUAL_CRED_VALIDATION;
 
 	if (OurCertificate)
 		{
@@ -907,6 +908,84 @@ void  NoFail(HRESULT hr)
 //		throw;
 	}
 //------------------------------------------------------------------------------
+static PCCERT_CONTEXT  CreateOurCertificateOld(const wchar_t* Name=L"Certificate")
+{
+	// CertCreateSelfSignCertificate(0,&SubjectName,0,0,0,0,0,0);
+	HRESULT hr = 0;
+	HCRYPTPROV hProv = NULL;
+	PCCERT_CONTEXT p = 0;
+	HCRYPTKEY hKey = 0;
+	CERT_NAME_BLOB sib = { 0 };
+	BOOL AX = 0;
+
+	// Step by step to create our own certificate
+//	try
+//		{
+		// Create the subject
+		char cb[1000] = {0};
+		sib.pbData = (BYTE*)cb; 
+		sib.cbData = 1000;
+		wchar_t cnbuf[512];
+		lstrcpyW(cnbuf, L"CN=");
+		lstrcatW(cnbuf, Name);
+		//wchar_t*	szSubject= L"CN=Certificate";
+		if (!CertStrToNameW(CRYPT_ASN_ENCODING, cnbuf,0,0,sib.pbData,&sib.cbData,NULL))return NULL;
+			//throw;
+	
+
+		// Acquire Context
+		wchar_t* pszKeyContainerName = L"Container";
+
+		if (!CryptAcquireContextW(&hProv,pszKeyContainerName,MS_DEF_PROV_W,PROV_RSA_FULL,CRYPT_NEWKEYSET | CRYPT_MACHINE_KEYSET))
+			{
+			hr = GetLastError();
+			if (GetLastError() == NTE_EXISTS)
+				{
+				if (!CryptAcquireContextW(&hProv,pszKeyContainerName,MS_DEF_PROV_W,PROV_RSA_FULL,CRYPT_MACHINE_KEYSET))return NULL;
+					//{
+					//throw;
+					//}
+				}
+			else return NULL;
+				//throw;
+			}
+
+		// Generate KeyPair
+		if (!CryptGenKey(hProv, AT_KEYEXCHANGE, CRYPT_EXPORTABLE, &hKey))return NULL;
+			// throw;
+
+		// Generate the certificate
+		CRYPT_KEY_PROV_INFO kpi = {0};
+		kpi.pwszContainerName = pszKeyContainerName;
+		kpi.pwszProvName = MS_DEF_PROV_W;
+		kpi.dwProvType = PROV_RSA_FULL;
+		kpi.dwFlags = CERT_SET_KEY_CONTEXT_PROP_ID;
+		kpi.dwKeySpec = AT_KEYEXCHANGE;
+
+		SYSTEMTIME et;
+		GetSystemTime(&et);
+		et.wYear += 1;	  // Default is +1 anyway
+
+		CERT_EXTENSIONS exts = {0};
+		p = CertCreateSelfSignCertificate(hProv,&sib,0,&kpi,NULL,NULL,&et,&exts);
+
+		AX = CryptFindCertificateKeyProvInfo(p,CRYPT_FIND_MACHINE_KEYSET_FLAG,NULL) ;
+/*		hCS = CertOpenStore(CERT_STORE_PROV_MEMORY,0,0,CERT_STORE_CREATE_NEW_FLAG,0);
+		AX = CertAddCertificateContextToStore(hCS,p,CERT_STORE_ADD_NEW,0);
+		AX = CryptFindCertificateKeyProvInfo(p,CRYPT_FIND_MACHINE_KEYSET_FLAG,NULL);*/
+//		}	
+//	catch(...){}
+	
+	if (hKey)
+		CryptDestroyKey(hKey);
+	hKey = 0;
+	
+	if (hProv)
+		CryptReleaseContext(hProv,0);
+	hProv = 0;
+	return p;
+}
+//------------------------------------------------------------------------------
 static PCCERT_CONTEXT  CreateOurCertificate(const wchar_t* Name=nullptr)  //L"Certificate")
 {
   NCTM::CEStr EStrProv(MS_DEF_PROV_W);
@@ -1038,8 +1117,9 @@ int  ServerInit(bool NoLoop=false)
 	// Configure our SSL SChannel
 	memset(&m_SchannelCred,0,sizeof(m_SchannelCred));
 	m_SchannelCred.dwVersion  = SCHANNEL_CRED_VERSION;
-	m_SchannelCred.dwFlags   |= SCH_CRED_NO_DEFAULT_CREDS;
-	m_SchannelCred.dwFlags    = SCH_CRED_NO_DEFAULT_CREDS | SCH_CRED_NO_SYSTEM_MAPPER | SCH_CRED_REVOCATION_CHECK_CHAIN;
+	//m_SchannelCred.dwFlags   |= SCH_CRED_NO_DEFAULT_CREDS;
+	//m_SchannelCred.dwFlags    = SCH_CRED_NO_DEFAULT_CREDS | SCH_CRED_NO_SYSTEM_MAPPER | SCH_CRED_REVOCATION_CHECK_CHAIN;
+    m_SchannelCred.dwFlags = SCH_CRED_NO_DEFAULT_CREDS | SCH_CRED_MANUAL_CRED_VALIDATION;
 	m_SchannelCred.hRootStore = hCS;
 	m_SchannelCred.dwMinimumCipherStrength = 128;
 

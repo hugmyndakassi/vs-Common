@@ -1803,6 +1803,37 @@ class CRawResEnum
 
 };
 
+static UINT _stdcall GetFileVersionDumb(HMODULE hMod)
+{
+ SECTION_HEADER* ResSec = NULL;
+ if(!GetModuleSection(hMod, ".rsrc", &ResSec))return 0;
+ PBYTE DataPtr = (PBYTE)hMod + ResSec->SectionRva;
+ ULONG DataLen = ResSec->VirtualSize;
+ if(DataLen <= 64)return 0;
+ DataLen -= 64;
+ wchar_t Name[] = {L"FileVersion"};
+ for(PBYTE EndPtr = &DataPtr[DataLen];DataPtr < EndPtr;DataPtr++)
+  {
+   if(!memcmp(DataPtr, &Name, sizeof(Name)-2))
+    {
+     DataPtr += sizeof(Name);
+     while(!*DataPtr)DataPtr++;
+     char StrBuf[32] = {0};
+     wchar_t* StrPtr = (wchar_t*)DataPtr;
+     UINT VStrLen = 0;
+     for(int didx=0;*StrPtr && (didx < 4);StrPtr++)
+      {
+       if(*StrPtr == ',')return 0;    // Rockey library
+       if(*StrPtr == '.'){didx++; continue;}
+       StrBuf[VStrLen++] = *StrPtr;
+      }
+     if(!VStrLen)return 0;
+     DBGMSG("Varsion: %s",&StrBuf);
+     return DecStrToNum<UINT>(StrBuf);
+    }
+  }
+ return 0;
+}
 };
 //==============================================================================
 #pragma warning(pop)

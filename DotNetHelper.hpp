@@ -37,6 +37,13 @@ struct ICorJitCompiler
  void* pVFT;
 };
 
+struct SCodeHeader   // Volatile
+{
+ PVOID MethodDesc;  // pointer back to the MethodDesc
+ DWORD gcInfoSize;  // size of GC info
+ DWORD CodeSize;    // size of native code (just the hot block if no cold block)
+ // ... then the actual native code immediately follows
+};
 
 //using namespace mscorlib;
 
@@ -601,8 +608,199 @@ static int FindIdxOfGetMethodNameFromMetadata(ICorJitInfo* pJitInfo)
 CORINFO_METHOD_STRUCT_ *ftn = ((CORINFO_METHOD_INFO *)methodInfo)->ftn;
 
 */
+//===========================================================================
+struct SHStub   // TODO: Thread local return event handling
+{
+ LPCSTR Name;      // Metadata
+ LPCSTR Class;     // Metadata
+ PVOID  Target;    // Orig addr
+ SIZE_T Size;      // Target Code size
+ BYTE   Code[72];  // Call report and continue
+};
 
+struct SHChunk
+{
+ SHChunk* Next;
+ SHStub*  Free;
+ ULONG    Size;
+};
 
+struct SHExcl   // Exclude from hooking  // Array, last is {NULL,NULL}
+{
+ LPCSTR Name;     // Metadata
+ LPCSTR Class;    // Metadata
+};
+
+using HReportProc = void (_fastcall *)(SHStub* Info);
+//---------------------------------------------------------------------------
+// TODO: Multithreaded support - lockfree lists needed!
+int HookCompiledMethod(LPCSTR Name, LPCSTR Class, PVOID TmpCode, PVOID FinCode, SIZE_T Size, HReportProc Proc, SHChunk** Chunks, SHExcl* Exclude)
+{
+ const SSIZE_T ChunkSize = 1024*1024; // 1mb
+ const SSIZE_T MaxDist = 0x7FFFFFFF;  // 2gb
+// DBGMSG("Enter");
+ if(!TmpCode || !FinCode || !Chunks)return -1;
+ if(!Name)Name = "";
+ if(!Class)Class = "";
+ DBGMSG("TmpCode=%p, FinCode=%p, Size=%p, Name='%s', Class='%s'",TmpCode,FinCode,Size,Name,Class);
+ SHChunk* LstChunk = nullptr; 
+ SHChunk* CurChunk = nullptr; 
+// DBGMSG("Stage 1");
+ if(Chunks)
+  {
+   for(SHChunk* cur=*Chunks;cur;cur=cur->Next)   // Look for an existing chunk in range
+    {
+     LstChunk = cur; 
+     if(!cur->Free)continue;     // No free space in this chunk
+     SSIZE_T dist = (SIZE_T)cur->Free - (SIZE_T)FinCode;   //((SIZE_T)cur->Free > (SIZE_T)FinCode)?((SIZE_T)cur->Free - (SIZE_T)FinCode):((SIZE_T)FinCode - (SIZE_T)cur->Free);
+     if((dist < MaxDist) && (dist > -MaxDist))
+      {
+       CurChunk = cur;  // Found usable chunk in range
+       break;
+      }
+    }
+  }
+// DBGMSG("Stage 2");
+ if(!CurChunk)
+  {
+   CurChunk = (SHChunk*)AllocNearbyChunk(FinCode, ChunkSize, PAGE_EXECUTE_READWRITE);
+   DBGMSG("New chunk: %p",CurChunk);
+   CurChunk->Next = nullptr;
+   CurChunk->Free = (SHStub*)((PBYTE)CurChunk + sizeof(SHChunk));
+   CurChunk->Size = ChunkSize;
+   if(LstChunk)LstChunk->Next = CurChunk;
+     else *Chunks = CurChunk;  // The first one
+   //DBGMSG("New chunk at %p", CurChunk); 
+  }
+// DBGMSG("Stage 3");
+ SHStub* Stub = (SHStub*)CurChunk->Free;
+ SIZE_T lsize = (((PBYTE)CurChunk->Free - (PBYTE)CurChunk) + sizeof(SHStub));
+ SIZE_T lfree = CurChunk->Size - lsize;
+ if(lfree < sizeof(SHStub))CurChunk->Free = nullptr;  // No space left
+  else CurChunk->Free++; 
+
+ static const int TrLen = 5;	  // E9 XX XX XX XX   // Jmp REL32
+
+ NCMN::IDEC<> didec;
+
+ UINT SpliceLen = 0; 
+     if(((PBYTE)TmpCode)[4] == 0xC5 )
+         Sleep(111);
+     if(((PBYTE)TmpCode)[3] == 0x75 )
+         Sleep(111);
+ for(PBYTE DisAddr=(PBYTE)TmpCode;SpliceLen < TrLen;DisAddr += didec.size)   // MSVC compiler crash if 'this->HookLen += dhde.len' is here
+  {
+   int len = didec.Decode(DisAddr);
+  // DBGMSG("len: %i, %i",len, dhde.len);
+   SpliceLen += len;
+  }
+//DBGMSG("full: %i",SpliceLen);
+DBGMSG("Stub code at %p, %p",&Stub->Code, lfree);
+SByteBlk blk(Stub->Code);
+PBYTE CntAddr = (PBYTE)FinCode + SpliceLen;
+#ifdef _AMD64_
+
+blk.Put(TmpCode, SpliceLen);  // stolen code (max 16)
+DBGMSG("Ret Dist: %i",(PBYTE)CntAddr - blk.GetAddr());
+blk.Put1( 0xE9 ); 
+//DBGMSG("AAAdddrr=%p, %p",(blk.GetAddr()-1),CntAddr);
+blk.Put4( NCMN::AddrToRelAddr<PBYTE>(blk.GetAddr()-1,TrLen,(PBYTE)CntAddr) );
+	
+ /*
+   blk.Put4( 0x53525150 );    // push rax - rbx
+   blk.Put4( 0x51415041 );    // push r8 - r9
+   blk.Put1( 0xE8 );   blk.Put4( 0 );   // Call +1
+   blk.Put1( 0x59 );          // pop rcx
+   blk.Put4( 0x2DE98348 );    // sub rcx 0x2D
+  // blk.Put2( 0xB848 ); blk.Put8( (SIZE_T)Proc );  // movabs rax, HReportProc  
+  // blk.Put2( 0xD0FF );        // call rax
+   blk.Put4( 0x58415941 );    // pop r9 - r8
+   blk.Put4( 0x58595A5B );    // pop rbx - rax
+
+   blk.Put(Code, SpliceLen);  // stolen code (max 16)
+
+   blk.Put1( 0xE9 ); 
+   blk.Put4( NCMN::AddrToRelAddr<PBYTE>(blk.GetAddr()-1,TrLen,CntAddr) );	
+             */
+  // blk.Put4( 0xF82444C7 ); blk.Put4( ((PDWORD)&CntAddr)[0] ); // mov [RSP-8], DWORD
+  // blk.Put4( 0xFC2444C7 ); blk.Put4( ((PDWORD)&CntAddr)[1] ); // mov [RSP-4], DWORD
+  // blk.Put4( 0xF82464FF );    // jmp [RSP-8] 
+#else
+
+#endif
+// DBGMSG("Stage 5");
+ DBGMSG("\r\n%#*.32D",128,TmpCode);  // Size
+ PVOID  BaseAddress = TmpCode;    
+ SIZE_T RegionSize  = Size;
+ ULONG  OldProtect  = 0;
+// BYTE   Patch[16];
+// *(__m128i*)&Patch = *(__m128i*)Code;
+ //Patch[0]  = 0xE9;
+ //*((PDWORD)&Patch[1]) = NCMN::AddrToRelAddr<PBYTE>((PBYTE)Code,TrLen,(PBYTE)&Stub->Code[0]);	   
+// DBGMSG("Stage 6");
+ NtProtectVirtualMemory(NtCurrentProcess, &BaseAddress, &RegionSize, PAGE_EXECUTE_READWRITE, &OldProtect);   // VirtualProtect(ProcAddr,TrLen,PAGE_EXECUTE_READWRITE,&PrevProt);  
+ DBGMSG("Tgt Dist: %i",(PBYTE)FinCode - (PBYTE)&Stub->Code[0]);
+ *((PBYTE)TmpCode) = 0xE9;       // NOTE: The target buffer is RO scratch buffer
+ *((PDWORD)((PBYTE)TmpCode+1)) = NCMN::AddrToRelAddr<PBYTE>((PBYTE)FinCode,TrLen,(PBYTE)&Stub->Code[0]);	
+//DBGMSG("\r\n%#*.32D",16,Code); 
+//_mm_storeu_si128((__m128i*)Code, *(__m128i*)&Patch);  // SSE2, single operation, should be safe   // No need, we own the buffer here
+// DBGMSG("Stage 7");
+ NtProtectVirtualMemory(NtCurrentProcess, &BaseAddress, &RegionSize, OldProtect, &OldProtect);   // Restore original protection of hooked area 
+ static UINT cmidx = 0;
+ DBGMSG("Done %u, at %p, %u: %#*.32D",cmidx++,TmpCode,SpliceLen,SpliceLen,TmpCode);
+ //for(;;)Sleep(60000);
+// Sleep(60000);
+ static int iiidx = 0;
+ //if(++iiidx >= 3){DBGMSG("Waiting forever!"); for(;;)Sleep(60000);}
+ //Sleep(10000);
+ return 0;
+}
+//---------------------------------------------------------------------------
+static bool IsEmptyJittedCode(PVOID Addr, DWORD Size)
+{
+ for(PBYTE Cur=(PBYTE)Addr,End=(PBYTE)Addr+Size;Cur<End;Cur++)
+  {
+   if(*Cur)return false;
+  }
+ return true;
+}
+//---------------------------------------------------------------------------
+// Avoiding hook of AllocMem in VFT because not owning actual hook of CorJit::CompileMethod (Will require some wrapper to do that)
+// 
+// Before the buffer ptr and size is set to 0
+// pSizeOfCode + 0x14 is the size in the class (was 0) and the buffer is above it
+// 
+// The jitted code will be at the pointer value + sizeof(PVOID) of pRealCodeHeader
+//                                                                                                                                                                                                                                                             ScratchBuffer     CodeSize
+// 4008C6A0F87F0000  0000000000000000  2063B243F87F0000  0000000000000000  F0EF620000000000  1002080400000000  FEFF7100F4FF7F00  0000000000000000  2063B243F87F0000  2063B243F87F0000  01721C0000000000  0000000000000000  A0AD890400000000  0000000000000000  0000000000000000  0000000000000000  00000000000000000000000000000000D0731C00000000000000000000000000  
+// 4008C6A0F87F0000  0000000000000000  2063B243F87F0000  0000000000000000  F0EF620000000000  1002080400000000  FEFF7100F4FF7F00  0000000000000000  2063B243F87F0000  2063B243F87F0000  01721C0000000000  0000000000000000  A0AD890400000000  58045543F87F0000  200B570C00000000  3400000000000000  0000000000000000B007FF0400000000D0731C000000000000003F43F87F0000  
+//
+static int CalcScratchBufferOffset(PVOID DataBefore, PVOID DataAfter, ULONG DataSize, ULONG CodeSize)
+{
+ SIZE_T* PtrAfter  = (SIZE_T*)DataAfter; 
+ SIZE_T* PtrBefore = (SIZE_T*)DataBefore;
+ int  LastPtrIdx = -1;
+ bool HaveSize = false;
+ static const SIZE_T UpperMem = 1024*1024;
+ SIZE_T ExpLen = (CodeSize + 0x14) & SIZE_T(~0xF);  // Is 0xF enough for extra bytes?  // 0x14? X32?
+ UINT idx = 0;
+ for(UINT tot=DataSize/sizeof(SIZE_T);idx < tot;idx++)
+  {
+   SIZE_T AVal = PtrAfter[idx];
+   if(!AVal)continue;
+   if(PtrBefore[idx] == AVal)continue;        // Not changed
+   if((AVal & SIZE_T(~0xF)) == ExpLen){HaveSize = true; break;}  // LastPtrIdx is the scratch buffer most likely
+   if(AVal > UpperMem)LastPtrIdx = idx;
+  }
+ if(!HaveSize || (LastPtrIdx < 0))return -1;
+ DBGMSG("Found: %i, %p,%p",LastPtrIdx,PtrAfter[LastPtrIdx],PtrAfter[idx]);
+ return LastPtrIdx * sizeof(SIZE_T);
+}
+//---------------------------------------------------------------------------
+static PVOID GetCodeInScratchBuf(ICorJitInfo* pJitInfo, PVOID EntryAddr, int SBufOffs)
+{
+ return (SBufOffs > 0)?(*(PBYTE*)((PBYTE)pJitInfo + SBufOffs) + sizeof(PVOID)):(EntryAddr);
+}
 //---------------------------------------------------------------------------
 }
 

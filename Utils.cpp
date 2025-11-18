@@ -35,7 +35,9 @@ void (_cdecl *pLogProc)(LPSTR Msh, UINT MsgLen, UINT Level) = DummyLogProc;
 
 #pragma function(memcmp, memset, memcpy, memmove)
 //---------------------------------------------------------------------------
-void*  __cdecl memmove(void* _Dst, const void* _Src, size_t _Size)
+#pragma optimize("", off)     // WHY: Latest MSVC calls memcpy inside the memcpy implementation - infinite loop
+#pragma function(memmove)
+__declspec(noinline) void*  __cdecl memmove(void* _Dst, const void* _Src, size_t _Size)
 {
  if((char*)_Dst <= (char*)_Src)return memcpy(_Dst,_Src,_Size);
  size_t ALen = _Size/sizeof(size_t);
@@ -45,15 +47,18 @@ void*  __cdecl memmove(void* _Dst, const void* _Src, size_t _Size)
  return _Dst;
 } 
 //---------------------------------------------------------------------------
-void*  __cdecl memcpy(void* _Dst, const void* _Src, size_t _Size)
-{
+#pragma function(memcpy)
+__declspec(noinline) void*  __cdecl memcpy(void* _Dst, const void* _Src, size_t _Size)
+{ 
  size_t ALen = _Size/sizeof(size_t);
  size_t BLen = _Size%sizeof(size_t);
+//__assume(d + size <= s || s + size <= d);
  for(size_t ctr=0;ctr < ALen;ctr++)((size_t*)_Dst)[ctr] = ((size_t*)_Src)[ctr]; 
  for(size_t ctr=(ALen*sizeof(size_t));ctr < _Size;ctr++)((char*)_Dst)[ctr] = ((char*)_Src)[ctr];  
  return _Dst;
 } 
 //---------------------------------------------------------------------------
+#pragma function(memset)
 void*  __cdecl memset(void* _Dst, int _Val, size_t _Size)      // TODO: Aligned, SSE by MACRO
 {
  size_t ALen = _Size/sizeof(size_t);
@@ -85,6 +90,7 @@ int    __cdecl memcmp(const void* _Buf1, const void* _Buf2, size_t _Size) // '(*
   }			   
  return 0; 
 } 
+#pragma optimize("", on)
 //---------------------------------------------------------------------------
 int __cdecl stricmp(char const* String1,char const* String2)
 {                 
@@ -1283,7 +1289,15 @@ BYTE _stdcall CharToLowCase(BYTE CharValue)
  return CharValue;
 }
 //---------------------------------------------------------------------------
-// Outpud WORD can be directly written to a string with right half-byte ordering  (little endian)
+// Output WORD can be directly written to a string with right half-byte ordering  (little endian)
+BYTE _fastcall HalfToChar(BYTE Value, bool UpCase)   
+{
+ BYTE loffs = ((BYTE)!UpCase * 0x20)+('A'-0x0A);  // 0 or 32   // Case
+ BYTE   Tmp = (Value & 0x0F);
+ return ((Tmp < 0x0A)?('0'+Tmp):(loffs+Tmp)); 
+}
+//---------------------------------------------------------------------------
+// Output WORD can be directly written to a string with right half-byte ordering  (little endian)
 WORD _fastcall HexToChar(BYTE Value, bool UpCase)   
 {
  WORD Result = 0;
@@ -2247,6 +2261,31 @@ void _stdcall DumpHexDataFmt(PVOID Data, UINT Size, UINT RowLen)  // Max row len
      BYTE Val  = XData[ctr];
      if(Val < 0x20)Val = '.';
      *(DPtr++) = Val;
+    }
+   *(DPtr++) = '\r';
+   *(DPtr++) = '\n';
+   LOGTXT((LPSTR)&Buffer,(DPtr - (PBYTE)&Buffer));
+  }
+}
+//---------------------------------------------------------------------------
+void _stdcall DumpHexDataCpp(PVOID Data, UINT Size, UINT RowLen)  // Max row len is 128 bytes
+{
+ PBYTE XData = (PBYTE)Data;
+ BYTE Buffer[256+128+4];
+ if(RowLen > 128)RowLen = 128;
+ for(UINT RSize=0;Size;XData+=RSize,Size-=RSize)
+  {
+   RSize = (RowLen > Size)?(Size):(RowLen);
+   PBYTE DPtr  = (PBYTE)&Buffer;
+   for(UINT ctr=0;ctr < RSize;ctr++)    // Create HEX string
+    {
+     *(DPtr++) = 0x20;
+     *(DPtr++) = '0';
+     *(DPtr++) = 'x';
+     WORD Val  = HexToChar(XData[ctr]);
+     *(DPtr++) = Val;
+     *(DPtr++) = Val >> 8;
+     *(DPtr++) = ',';
     }
    *(DPtr++) = '\r';
    *(DPtr++) = '\n';

@@ -2,6 +2,8 @@
 //#include<stdio.h>
 //#include<math.h>
  
+// https://stackoverflow.com/questions/29767027/fastest-c-way-to-convert-float-to-string
+//
 extern "C" void*  __cdecl memmove(void* _Dst, const void* _Src, size_t _Size);
 
 /*#pragma pack(push,1)
@@ -118,6 +120,7 @@ unsigned long long uExp10[MaxDigit] =    // NOTE: No __int64 for GCC!!!
 // Must produce: 123.1234000   // Add zeroes to 'afterpoint'
 //               123.0         // Keep at least one zero, but trim to 'afterpoint'
 //               123           // Do not keep zero if integer
+// NOTE: Cannot handle 3.4028235E+38
 //
 char* ftoa_simple(double num, size_t afterpoint, char *buf, size_t len, size_t* size)    // TODO: Move to a converter class
 { 

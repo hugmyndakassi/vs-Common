@@ -223,7 +223,7 @@ __forceinline const C* Decrypt(void)  // Run-time decryption   // There will be 
 #endif  */
 
 //====================================================================================
-static inline constexpr const bool   IsBigEnd   = false;
+static inline constexpr const bool   IsBigEnd   = false;                         
 static inline constexpr const SIZE_T ExEncKey   = (SIZE_T)0xD6B4A9C5E2B4C7D3ull;   // TODO: Must be same as a hardware calculated key
 static inline constexpr const SIZE_T ctBuildKey = 0x2387bc671822b5f8; // IT WILL NEWER WORK WITH RANDOM CONSTANTS - COMPILERS ARE TOO SMART!  MakeBuildKey();  // 0x2387bc671822b5f8; // // TODO: Move to CT_CRYPT // NOTE: Data members come before function members so if MakeBuildKey is member of the same class then it is considered an undefined function
 

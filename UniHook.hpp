@@ -144,8 +144,11 @@ bool SetHookIntr(PBYTE ProcAddr=NULL, UINT Flags=EHookFlg::hfFillNop|EHookFlg::h
 {
  if(!ProcAddr || (this->IsActive() && !(Flags & EHookFlg::hfForceHook))){/*DBGMSG("Failed: %p",ProcAddr);*/ return false;}       // Logging here will make the message duplicated by templating and size will bloat!
 // DBGMSG("Hooking: %p",ProcAddr);
+IDEC<> didec;
+
 #ifdef _AMD64_
- NHDE::HDE64 dhde;
+ //SIDEC didec;   // NHDE::HDE64 dhde;
+ //SIDEC::supported_architecture Arch = SIDEC::X64;
  enum EHT64 {htJmp, htPush, htJmpRel, htJmpRAX};
  unsigned int TrLen = TrLenL;
  int HookTypeX64 = htJmpRAX;
@@ -163,7 +166,8 @@ bool SetHookIntr(PBYTE ProcAddr=NULL, UINT Flags=EHookFlg::hfFillNop|EHookFlg::h
      if(Sc == 8){HookTypeX64 = htJmpRel; TrLen = TrLenM; this->StolenCode[sizeof(this->StolenCode)-1] = Sv;}
     }
 #else
- NHDE::HDE32 dhde;
+// SIDEC didec;  // NHDE::HDE32 dhde;
+// SIDEC::supported_architecture = SIDEC::X32;
  unsigned int TrLen = TrLenS;
 #endif					   
  UINT  CodeLen   = 0;
@@ -171,12 +175,12 @@ bool SetHookIntr(PBYTE ProcAddr=NULL, UINT Flags=EHookFlg::hfFillNop|EHookFlg::h
 // if(!HookFunc)HookFunc = HProc;       // No more bloating
  if(!ProcAddr)ProcAddr = *(PBYTE*)&this->HookAddr;
  if(*ProcAddr == 0xFC)ProcAddr++;   // CLD  // Just in case
- for(PBYTE DisAddr=ProcAddr;this->HookLen < TrLen;DisAddr += dhde.len)   // MSVC compiler crash if 'this->HookLen += dhde.len' is here
+ for(PBYTE DisAddr=ProcAddr;this->HookLen < TrLen;DisAddr += didec.size)   // MSVC compiler crash if 'this->HookLen += dhde.len' is here
   {
-   this->HookLen += dhde.Disasm(DisAddr);
+   this->HookLen += didec.Decode(DisAddr);  // dhde.Disasm(DisAddr);
    if((*DisAddr == 0xE9)&&(Flags & EHookFlg::hfFollowJmp))
     {
-     dhde.len = 0;
+     didec.size = 0;
      DisAddr  = (PBYTE)RelAddrToAddr(DisAddr,5,*(DWORD*)&DisAddr[1]);
      ProcAddr = DisAddr;
      this->HookLen = 0;
@@ -185,7 +189,7 @@ bool SetHookIntr(PBYTE ProcAddr=NULL, UINT Flags=EHookFlg::hfFillNop|EHookFlg::h
     }
    if((*DisAddr == 0xEB)&&(Flags & EHookFlg::hfFollowJmp))
     {
-     dhde.len = 0;
+     didec.size = 0;
      DisAddr  = (PBYTE)RelAddrToAddr(DisAddr,2,*(BYTE*)&DisAddr[1]);
      ProcAddr = DisAddr;
      this->HookLen = 0;
@@ -208,11 +212,11 @@ bool SetHookIntr(PBYTE ProcAddr=NULL, UINT Flags=EHookFlg::hfFillNop|EHookFlg::h
        else if(RegIdx == 5){this->StolenCode[(--CodeLen)++] = 0x6D; this->StolenCode[CodeLen++] = 0x00;}
      continue;
     }
- if(dhde.opcode == 0x74) // jz rel8     // TODO: Any flags!!!   // Now it is done for hooking KiUserExceptionDispatcher
+ if(didec.opcode == 0x74) // jz rel8     // TODO: Any flags!!!   // Now it is done for hooking KiUserExceptionDispatcher
   {								
    this->StolenCode[CodeLen++] = 0x75;   // JNZ
    this->StolenCode[CodeLen++] = 0x14;
-   PVOID  Addr = RelAddrToAddr(DisAddr,dhde.len,dhde.imm.imm8);      // dhde.disp.disp8 ???
+   PVOID  Addr = RelAddrToAddr(DisAddr,didec.size,didec.imm);      // dhde.disp.disp8 ???
    PDWORD Carr = (PDWORD)&this->StolenCode[CodeLen];
   // LOGMSG("jmp at %p to %p, disp32 = %08X, imm32 = %08X",DisAddr,Addr,dhde.disp.disp32,dhde.imm.imm32);
    Carr[0]  = 0xF82444C7;	// mov [RSP-8], DWORD
@@ -223,9 +227,9 @@ bool SetHookIntr(PBYTE ProcAddr=NULL, UINT Flags=EHookFlg::hfFillNop|EHookFlg::h
    CodeLen += 20;
    continue;
   }
- if(dhde.opcode == 0xE8) // call rel32     
+ if(didec.opcode == 0xE8) // call rel32     
   {								
-   PVOID  Addr = RelAddrToAddr(DisAddr,dhde.len,dhde.imm.imm32);   // Full QWORD addr is stored there    // dhde.disp.disp32 ???
+   PVOID  Addr = RelAddrToAddr(DisAddr,didec.size,didec.imm);   // Full QWORD addr is stored there    // dhde.disp.disp32 ???
    PDWORD Carr = (PDWORD)&this->StolenCode[CodeLen];
   // LOGMSG("Call at %p to %p, disp32 = %08X, imm32 = %08X",DisAddr,Addr,dhde.disp.disp32,dhde.imm.imm32);
    Carr[0]  = 0xF82444C7;	// mov [RSP-8], DWORD
@@ -236,12 +240,12 @@ bool SetHookIntr(PBYTE ProcAddr=NULL, UINT Flags=EHookFlg::hfFillNop|EHookFlg::h
    CodeLen += 20;
    continue;
   }
- if((dhde.opcode == 0xFF)&&(dhde.modrm == 0x25))    // jmp qword ptr [REL32] 
+ if((didec.opcode == 0xFF)&&(didec.modrm.value == 0x25))    // jmp qword ptr [REL32] 
   {
-   int Extra = CountNops(&DisAddr[dhde.len]);      // In Windows 10(2004) Shell32::SHGetFolderPathW is redirected to windows.storage.dll which is delay-loaded. Following jmp [rel] will set hook on delay-load stub instead of a target function
+   int Extra = CountNops(&DisAddr[didec.size]);      // In Windows 10(2004) Shell32::SHGetFolderPathW is redirected to windows.storage.dll which is delay-loaded. Following jmp [rel] will set hook on delay-load stub instead of a target function
    if(((int)TrLen - ((int)this->HookLen + Extra)) <= 0)     // Fits as a last only    // <<<<<<<<< !!!!!!!!!! 
     {
-     PVOID  Addr = RelAddrToAddr(DisAddr,dhde.len,dhde.disp.disp32);           //   &DisAddr[(int)dhde.len + (int)dhde.disp.disp32];
+     PVOID  Addr = RelAddrToAddr(DisAddr,didec.size,didec.disp);           //   &DisAddr[(int)dhde.len + (int)dhde.disp.disp32];
      PDWORD Carr = (PDWORD)&this->StolenCode[CodeLen];
      Addr = *(PVOID*)Addr;
   // LOGMSG("jmp at %p to %p, disp32 = %08X, imm32 = %08X",DisAddr,Addr,dhde.disp.disp32,dhde.imm.imm32);
@@ -255,18 +259,18 @@ bool SetHookIntr(PBYTE ProcAddr=NULL, UINT Flags=EHookFlg::hfFillNop|EHookFlg::h
     }
      else      // Follow the jump
       {
-       PVOID  Addr = RelAddrToAddr(DisAddr,dhde.len,dhde.disp.disp32);
+       PVOID  Addr = RelAddrToAddr(DisAddr,didec.size,didec.disp);
        ProcAddr = DisAddr = *(PBYTE*)Addr;
-       dhde.len = 0;
+       didec.size = 0;
        this->HookLen = 0;
        CodeLen  = 0;
        continue;
       }
   } 
 #else
- if(dhde.opcode == 0xE8) // call rel32     
+ if(didec.opcode == 0xE8) // call rel32     
   {								
-   PVOID Addr = RelAddrToAddr(DisAddr,dhde.len,dhde.imm.imm32);  
+   PVOID Addr = RelAddrToAddr(DisAddr,didec.size,didec.imm);  
    this->StolenCode[CodeLen] = 0xE8;
    *(PDWORD)&this->StolenCode[CodeLen+1] = AddrToRelAddr(&this->StolenCode[CodeLen],5,(PBYTE)Addr);
    CodeLen += 5;
@@ -274,8 +278,8 @@ bool SetHookIntr(PBYTE ProcAddr=NULL, UINT Flags=EHookFlg::hfFillNop|EHookFlg::h
   }
 #endif
 
-   memcpy(&this->StolenCode[CodeLen],DisAddr,dhde.len);   // Copy current instruction as is
-   CodeLen += dhde.len;
+   memcpy(&this->StolenCode[CodeLen],DisAddr,didec.size);   // Copy current instruction as is
+   CodeLen += didec.size;
   }
  BYTE Patch[16];   
  *(PVOID*)&this->HookProc = HookFunc;   // *(PVOID*)&this->HookProc = (PVOID)HookFunc;

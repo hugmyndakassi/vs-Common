@@ -193,6 +193,7 @@ BOOL _stdcall IsKeyCombinationPressed(DWORD Combination);
 bool  _stdcall IsLogHandle(HANDLE Hnd);
 void  _stdcall DumpHexData(PVOID Data, UINT Size, UINT RowLen=32);
 void  _stdcall DumpHexDataFmt(PVOID Data, UINT Size, UINT RowLen=32);
+void  _stdcall DumpHexDataCpp(PVOID Data, UINT Size, UINT RowLen=16);
 int   _stdcall RefreshINIValueInt(LPSTR SectionName, LPSTR ValueName, int Default, LPSTR FileName);
 int   _stdcall RefreshINIValueStr(LPSTR SectionName, LPSTR ValueName, LPSTR Default, LPSTR RetString, DWORD Size, LPSTR FileName);
 int   _stdcall RefreshINIValueStr(LPSTR SectionName, LPSTR ValueName, LPSTR Default, PWSTR RetString, DWORD Size, LPSTR FileName);
@@ -211,6 +212,7 @@ bool  _stdcall IsValidAsciiString(PBYTE Ptr, UINT MinLen, UINT MaxLen);
 bool  _stdcall IsStringContains(LPSTR String, LPSTR Target, UINT StrLen=0, UINT TgtLen=0);
 long  _fastcall CharToHex(BYTE CharValue); 
 WORD  _fastcall HexToChar(BYTE Value, bool UpCase=true);
+BYTE  _fastcall HalfToChar(BYTE Value, bool UpCase=true);  
 //char* _fastcall DecNumToStrU(UINT64 Val, char* buf, int* Len);
 BYTE  _stdcall CharToLowCase(BYTE CharValue);
 //UINT64 _fastcall DecStrToNum(char* Str);  //UINT _fastcall DecStrToNum(char* Str);
@@ -444,6 +446,10 @@ INLINE bool IsAligned(T ptr)
 
 
 */
+
+//------------------------------------------------------------------------------------
+
+
 __declspec(noinline) PVOID _fastcall FixExportRedir(PVOID ThisLibBase, PVOID ExpProcAddr, PWSTR LibPath);
 #if defined(_AMD64_)
 // NOTE: Arguments number is limited!!!!!
@@ -1647,6 +1653,54 @@ template<int Ctr, int MIdx, typename T> constexpr __forceinline PBYTE _stdcall A
  return olen+4;
 }*/
 //---------------------------------------------------------------------------
+static PVOID AllocNearbyChunk(PVOID TgtAddr, SIZE_T MemSize, DWORD AllocFlg)
+{
+ const SIZE_T Range2GB = 0x80000000;
+ MEMORY_BASIC_INFORMATION MemInf;
+ PVOID Found = nullptr;
+ PVOID Base  = TgtAddr;
+ while(VirtualQuery(Base,&MemInf,sizeof(MemInf)))  // Search below          
+  {
+   SIZE_T EndOffs = (SIZE_T)MemInf.BaseAddress + MemInf.RegionSize;
+   SIZE_T Dist    = EndOffs - (SIZE_T)TgtAddr;
+   if(Dist >= Range2GB)break; // Too far away, stop searching 
+
+   if((MemInf.State == MEM_FREE) && (MemInf.RegionSize >= MemSize)){Found=MemInf.BaseAddress; break;}
+   Base  = &((BYTE*)MemInf.BaseAddress)[MemInf.RegionSize];   
+  }
+ if(!Found)  // If not found below, search above
+  {
+   Base = TgtAddr;
+   while(VirtualQuery(Base,&MemInf,sizeof(MemInf)))  
+    {
+     SIZE_T Dist = (SIZE_T)TgtAddr - (SIZE_T)MemInf.BaseAddress;
+     if(Dist >= Range2GB)break; // Too far away, stop searching  
+
+     if((MemInf.State == MEM_FREE) && (MemInf.RegionSize >= MemSize)){Found=MemInf.BaseAddress; break;}
+     Base = &((BYTE*)MemInf.BaseAddress)[-1];      // Move upwards in memory
+    }
+  }
+ if(!Found)return nullptr;
+// DBGMSG("BaseAddress=%p, ",BaseAddress,AllocationBase,RegionSize,
+ PVOID ptr = VirtualAlloc(Found, MemSize, MEM_COMMIT|MEM_RESERVE, AllocFlg);    // May fail?
+ DBGMSG("Error: %i, ptr=%p, Addr=%p, Size=%p", GetLastError(),ptr,Found,MemSize);
+ return ptr;
+}
+//---------------------------------------------------------------------------
+struct SByteBlk
+{
+ PBYTE Base;
+ ULONG Offs;
+ SByteBlk(PVOID Addr):Base((PBYTE)Addr), Offs(0) {}
+ ULONG GetOffs(void){return this->Offs;}
+ PBYTE GetAddr(void){return &this->Base[this->Offs];}
+
+ void Put1(BYTE val){ this->Base[this->Offs] = val; this->Offs += sizeof(val);}
+ void Put2(WORD val){ *((WORD*)&this->Base[this->Offs]) = val; this->Offs += sizeof(val);}
+ void Put4(DWORD val){ *((DWORD*)&this->Base[this->Offs]) = val; this->Offs += sizeof(val);}
+ void Put8(UINT64 val){ *((UINT64*)&this->Base[this->Offs]) = val; this->Offs += sizeof(val);}
+ void Put(PVOID Addr, ULONG Size){ memcpy(&this->Base[this->Offs], Addr, Size); this->Offs += Size;}
+};
 //---------------------------------------------------------------------------
 #pragma warning(pop)
 

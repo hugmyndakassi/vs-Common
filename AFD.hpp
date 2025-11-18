@@ -58,7 +58,7 @@
 #define AFD_ENUM_NETWORK_EVENTS         34
 #define AFD_DEFER_ACCEPT         35
 #define AFD_GET_PENDING_CONNECT_DATA 41
-#define AFD_CONNECT_UNK              49
+#define AFD_SUPER_CONNECT              49
  
 /* AFD IOCTLs */
  
@@ -98,7 +98,7 @@
 #define IOCTL_AFD_GET_PENDING_CONNECT_DATA _AFD_CONTROL_CODE(AFD_GET_PENDING_CONNECT_DATA, METHOD_NEITHER)
 #define IOCTL_AFD_ENUM_NETWORK_EVENTS _AFD_CONTROL_CODE(AFD_ENUM_NETWORK_EVENTS, METHOD_NEITHER)
 
-#define IOCTL_AFD_CONNECT_UNK _AFD_CONTROL_CODE(AFD_CONNECT_UNK, METHOD_NEITHER)
+#define IOCTL_AFD_SUPER_CONNECT _AFD_CONTROL_CODE(AFD_SUPER_CONNECT, METHOD_NEITHER)
 
 /*
 #define AFD_BIND        0x12003
@@ -205,12 +205,28 @@ struct SAFD_INFO_CONN      // 0x28(Two addr?) - This structure is in InputBuffer
  UCHAR  AddrLst[0];   // PH,PL,A0,A1,A2,A3
 };
 
-struct SAFD_INFO_CONN_UNK 
+struct SAFD_INFO_CONN_SUPER 
 {
  PVOID  UnkPtr;       // Pointer? // On x64 8 bytes
  USHORT UnknCnt;      // 14
  USHORT AddrCnt;      // 2 // Last addr should be empty?
  UCHAR  AddrLst[0];   // PH,PL,A0,A1,A2,A3
+};
+
+struct SAFD_CONNECT_IN
+{
+ BOOLEAN SanActive;
+ HANDLE  RootEndpoint;
+ HANDLE  ConnectEndpoint;
+ BYTE    AddressData[28];   // SOCKADDR ?
+};
+
+struct SAFD_SUPER_CONNECT_IN
+{
+ BOOL   UseSAN;
+ ULONG  Tdi;
+ USHORT TdiAddressLength;
+ BYTE   AddressData[28];
 };
 
 struct SAFD_WSABUF
